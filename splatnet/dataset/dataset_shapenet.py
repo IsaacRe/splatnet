@@ -299,6 +299,7 @@ class InputShapenetAllCategories(caffe.Layer):
 
         # reshape and reset index
         self.data = data[:, self.feat_dims].reshape(num_samples, self.sample_size, -1, 1).transpose(0, 2, 3, 1)
+        import pdb;pdb.set_trace()
         self.label = label.reshape(num_samples, self.sample_size, -1, 1).transpose(0, 2, 3, 1)
         self.label_mask = label_mask
         self.index = 0

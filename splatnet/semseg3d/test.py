@@ -102,11 +102,13 @@ def semseg_test(dataset, network, weights, input_dims='nx_ny_nz_r_g_b_h', sample
         raise ValueError('Unsupported dataset: {}'.format(dataset))
 
     tic = time.time()
+    import pdb;pdb.set_trace()
     prob = extract_feat_scene(network, weights,
                               feed=dict(data=data.transpose().reshape(1, -1, 1, len(data))),
                               out_names='prob',
                               sample_size=sample_size)
     elapsed = time.time() - tic
+    import pdb; pdb.set_trace()
 
     pred = prob.argmax(axis=1).squeeze()
 
@@ -227,6 +229,7 @@ if __name__ == '__main__':
                                                     '--gt_rgb ' if args.gt_rgb else '',
                                                     args.gt_column).split(' '))
 
-    if log_train:
+    if log_train is not '':
+        import pdb; pdb.set_trace()
         plot_log.parse_and_plot(log_train)
 

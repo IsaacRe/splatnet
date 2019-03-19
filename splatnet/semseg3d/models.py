@@ -92,6 +92,7 @@ def semseg_seq(arch_str='64_128_256_256', batchnorm=True,
     else:
         raise ValueError('Dataset {} unknown'.format(dataset))
 
+    import pdb; pdb.set_trace()
     # Input/Data layer
     if deploy:
         n.data = L.Input(shape=dict(dim=[1, len(input_dims), 1, sample_size]))
@@ -117,6 +118,7 @@ def semseg_seq(arch_str='64_128_256_256', batchnorm=True,
     bltr_idx = 0
     lattices = dict()
     last_in_block = dict()
+    import pdb; pdb.set_trace()
     for (layer_type, n_out) in arch_str:
         if layer_type == 'c':
             n['conv' + str(idx)] = L.Convolution(top_prev,

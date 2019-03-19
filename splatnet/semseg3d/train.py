@@ -82,6 +82,7 @@ def semseg_train(network, exp_dir, exp_prefix, args):
         else:
             raise ValueError('Invalid file: {}'.format(args.init_model))
 
+    import pdb; pdb.set_trace()
     solver.solve()
 
 

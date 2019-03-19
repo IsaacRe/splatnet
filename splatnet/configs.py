@@ -14,7 +14,7 @@ sys.path.append(os.path.join(ROOT_DIR, 'splatnet', 'dataset'))
 
 # modify these if you put data in non-default locations
 FACADE_DATA_DIR = os.path.join(ROOT_DIR, 'data', 'ruemonge428')
-SHAPENET3D_DATA_DIR = os.path.join(ROOT_DIR, 'data', 'shapenet_ericyi_ply')
+SHAPENET3D_DATA_DIR = os.path.join(ROOT_DIR, 'data', 'shapenetcore_partanno_segmentation_benchmark_v0_normal')
 SHAPENET2D3D_DATA_DIR = os.path.join(ROOT_DIR, 'data', 'shapenet_2d3d_h5')
 
 # facade global variables
