@@ -3,6 +3,7 @@ Copyright (C) 2018 NVIDIA Corporation.  All rights reserved.
 Licensed under the CC BY-NC-SA 4.0 license (https://creativecommons.org/licenses/by-nc-sa/4.0/legalcode).
 """
 import os
+import sys
 import pickle
 import numpy as np
 import caffe
@@ -53,10 +54,14 @@ def points_single_category(subset, category='airplane',
     if not feat_list:
         data_dir = os.path.join(root, subset, category)
         hash_list = sorted([s[:-4] for s in filter(lambda s: s.endswith('.ply'), os.listdir(data_dir))])
-        for s in hash_list:
+        for i, s in enumerate(hash_list):
+            sys.stdout.write('\r')
+            sys.stdout.write("[%-40s] %d%%" % ('='* int(i / (len(hash_list) - 1) * 40), 100*i/len(hash_list)))
+            sys.stdout.flush()
             data = np.loadtxt(os.path.join(data_dir, s + '.ply'), skiprows=14)
             feat_list.append(data[:, :6])
             label_list.append(data[:, -1])
+        sys.stdout.write('\t%d instances loaded.' % (i + 1))
 
         if write_cache:
             with open(cache_path, mode='wb') as f:
@@ -99,6 +104,7 @@ def points_all_categories(subset,
 
     if not feats:
         for i, c in enumerate(SN_CATEGORIES):
+            sys.stdout.write('\nPreparing %s object data...\n' % SN_CATEGORY_NAMES[i])
             c_feats, c_object_labels, c_part_labels, c_shape_ids = points_single_category(subset,
                                                                                          category=c,
                                                                                          dims='x_y_z_nx_ny_nz',
@@ -107,6 +113,7 @@ def points_all_categories(subset,
                                                                                          cache_dir=cache_dir,
                                                                                          shuffle=False,
                                                                                          root=root)
+            sys.stdout.write('\nDone.')
             c_part_labels = [v + sum(SN_NUM_PART_CATEGORIES[:i]) for v in c_part_labels]
             feats.extend(c_feats)
             object_labels.extend(c_object_labels)
@@ -129,7 +136,7 @@ def points_all_categories(subset,
         idx = np.random.permutation(len(shape_ids))
         feats, object_labels, part_labels, shape_ids = feats[idx], object_labels[idx], part_labels[idx], shape_ids[idx]
 
-    return feats, object_labels, part_labels, shape_ids
+    return feats, [np.array(l) for l in object_labels], part_labels, shape_ids
 
 
 class InputShapenet(caffe.Layer):
@@ -137,18 +144,19 @@ class InputShapenet(caffe.Layer):
         # make a deep copy
         data = [d.copy() for d in self.data_copy]
         label = [l.copy() for l in self.label_copy]
+        category_labels = [l.copy() for l in self.category_labels_copy]
 
         # duplicate if necessary to fill batch
         num_samples = len(data)
         if num_samples < self.batch_size:
             idx = np.concatenate((np.tile(np.arange(num_samples), (self.batch_size // num_samples, )),
                                   np.random.permutation(num_samples)[:(self.batch_size % num_samples)]), axis=0)
-            data, label = [data[i] for i in idx], [label[i] for i in idx]
+            data, label, categoryr_labels = [data[i] for i in idx], [label[i] for i in idx], [category_labels[i] for i in idx]
             num_samples = self.batch_size
 
         # shuffle samples
         idx = np.random.permutation(num_samples)
-        data, label = [data[i] for i in idx], [label[i] for i in idx]
+        data, label, category_labels = [data[i] for i in idx], [label[i] for i in idx], [category_labels[i] for i in idx]
 
         # sample to a fixed length
         for i in range(num_samples):
@@ -160,6 +168,7 @@ class InputShapenet(caffe.Layer):
 
         data = np.concatenate(data, axis=0)     # (NxS) x C
         label = np.concatenate(label, axis=0)   # (NxS)
+        category_labels = np.stack(category_labels)
 
         # data aug. # TODO should this be done at batch level?
         if self.jitter_rotation > 0:
@@ -189,6 +198,7 @@ class InputShapenet(caffe.Layer):
         # reshape and reset index
         self.data = data[:, self.feat_dims].reshape(num_samples, self.sample_size, -1, 1).transpose(0, 2, 3, 1)
         self.label = label.reshape(num_samples, self.sample_size, -1, 1).transpose(0, 2, 3, 1)
+        self.category_labels = category_labels
         self.index = 0
 
     def setup(self, bottom, top):
@@ -211,11 +221,12 @@ class InputShapenet(caffe.Layer):
                 self.raw_dims.extend(feat_group)
         self.feat_dims = [self.raw_dims.index(f) for f in params['feat_dims'].split('_')]
 
-        data, _, label, _ = points_single_category(params['subset'], params['category'],
-                                                   dims='_'.join(self.raw_dims), root=params['root'])
+        data, object_label, label, _ = points_single_category(params['subset'], params['category'],
+                                                              dims='_'.join(self.raw_dims), root=params['root'])
         self.data_copy = data
+        self.category_labels_copy = object_label
         self.label_copy = label
-        self.top_names = ['data', 'label']
+        self.top_names = ['data', 'label', 'category_labels']
         self.top_channels = [len(self.raw_dims), 1]
 
         if len(top) != len(self.top_names):
@@ -226,12 +237,15 @@ class InputShapenet(caffe.Layer):
 
     def reshape(self, bottom, top):
         for top_index, name in enumerate(self.top_names):
+            if name == 'category_labels':
+                continue
             shape = (self.batch_size, self.top_channels[top_index], 1, self.sample_size)
             top[top_index].reshape(*shape)
 
     def forward(self, bottom, top):
         top[0].data[...] = self.data[self.index:self.index+self.batch_size]
         top[1].data[...] = self.label[self.index:self.index+self.batch_size]
+        top[2].data[...] = self.category_labels[self.index:self.index+self.batch_size]
 
         self.index += self.batch_size
         if self.index + self.batch_size > len(self.data):
@@ -247,18 +261,21 @@ class InputShapenetAllCategories(caffe.Layer):
         data = [d.copy() for d in self.data_copy]
         label = [l.copy() for l in self.label_copy]
         label_mask = [l.copy() for l in self.label_mask_copy]
+        category_labels = [l.copy() for l in self.category_labels_copy]
 
         # duplicate if necessary to fill batch
         num_samples = len(data)
         if num_samples < self.batch_size:
             idx = np.concatenate((np.tile(np.arange(num_samples), (self.batch_size // num_samples, )),
                                   np.random.permutation(num_samples)[:(self.batch_size % num_samples)]), axis=0)
-            data, label_mask, label = [data[i] for i in idx], [label_mask[i] for i in idx], [label[i] for i in idx]
+            data, label_mask, label, category_labels =\
+                    [data[i] for i in idx], [label_mask[i] for i in idx], [label[i] for i in idx], [category_labels[i] for i in idx]
             num_samples = self.batch_size
 
         # shuffle samples
         idx = np.random.permutation(num_samples)
-        data, label_mask, label = [data[i] for i in idx], [label_mask[i] for i in idx], [label[i] for i in idx]
+        data, label_mask, label, category_labels =\
+                [data[i] for i in idx], [label_mask[i] for i in idx], [label[i] for i in idx], [category_labels[i] for i in idx]
 
         # sample to a fixed length
         for i in range(num_samples):
@@ -271,6 +288,7 @@ class InputShapenetAllCategories(caffe.Layer):
         data = np.concatenate(data, axis=0)     # (NxS) x C
         label = np.concatenate(label, axis=0)   # (NxS)
         label_mask = np.concatenate([l.reshape(1, -1, 1, 1) for l in label_mask], axis=0)     # N x 50 x 1 x 1
+        category_labels = np.stack(category_labels)
 
         # data aug.
         if self.jitter_rotation > 0:
@@ -299,9 +317,9 @@ class InputShapenetAllCategories(caffe.Layer):
 
         # reshape and reset index
         self.data = data[:, self.feat_dims].reshape(num_samples, self.sample_size, -1, 1).transpose(0, 2, 3, 1)
-        import pdb;pdb.set_trace()
         self.label = label.reshape(num_samples, self.sample_size, -1, 1).transpose(0, 2, 3, 1)
         self.label_mask = label_mask
+        self.category_labels = category_labels
         self.index = 0
 
     def setup(self, bottom, top):
@@ -328,14 +346,15 @@ class InputShapenetAllCategories(caffe.Layer):
 
         data, category, label, _ = points_all_categories(params['subset'],
                                                          dims='_'.join(self.raw_dims), root=params['root'])
+        self.category_labels_copy = category
         self.data_copy = data
         self.label_copy = label
         self.label_mask_copy = [category_mask(c) for c in category]
-        self.top_names = ['data', 'label', 'label_mask']
+        self.top_names = ['data', 'label', 'category_labels', 'label_mask']
         self.top_channels = [len(self.raw_dims), 1, sum(SN_NUM_PART_CATEGORIES)]
 
         if not self.output_mask:
-            self.top_names, self.top_channels = self.top_names[:2], self.top_channels[:2]
+            self.top_names, self.top_channels = self.top_names[:3], self.top_channels[:2]
 
         if len(top) != len(self.top_names):
             raise Exception('Incorrect number of outputs (expected %d, got %d)' %
@@ -347,13 +366,13 @@ class InputShapenetAllCategories(caffe.Layer):
         top[0].reshape(self.batch_size, self.top_channels[0], 1, self.sample_size)
         top[1].reshape(self.batch_size, self.top_channels[1], 1, self.sample_size)
         if self.output_mask:
-            top[2].reshape(self.batch_size, self.top_channels[2], 1, 1)
+            top[3].reshape(self.batch_size, self.top_channels[2], 1, 1)
 
     def forward(self, bottom, top):
         top[0].data[...] = self.data[self.index:self.index+self.batch_size]
         top[1].data[...] = self.label[self.index:self.index+self.batch_size]
         if self.output_mask:
-            top[2].data[...] = self.label_mask[self.index:self.index+self.batch_size]
+            top[3].data[...] = self.label_mask[self.index:self.index+self.batch_size]
 
         self.index += self.batch_size
         if self.index + self.batch_size > len(self.data):

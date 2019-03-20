@@ -207,7 +207,13 @@ if __name__ == '__main__':
         os.makedirs(args.exp_dir, exist_ok=True)
 
     if args.single_model:
-        partseg_train_single_model(args.network, args.exp_dir, args)
+        try:
+            partseg_train_single_model(args.network, args.exp_dir, args)
+        except:
+            import pdb, traceback, sys
+            typ, val, tb = sys.exc_info()
+            traceback.print_exc()
+            pdb.post_mortem(tb)
     else:
         if not args.categories:
             if args.dataset == 'shapenet':

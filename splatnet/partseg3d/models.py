@@ -83,7 +83,7 @@ def partseg_seq(arch_str='64_128_256_256', batchnorm=True,
         del dataset_params_test['subset_train'], dataset_params_test['subset_test']
 
         # data layers
-        datalayer_train = L.Python(name='data', include=dict(phase=caffe.TRAIN), ntop=2,
+        datalayer_train = L.Python(name='data', include=dict(phase=caffe.TRAIN), ntop=3,
                                    python_param=dict(module='dataset_shapenet', layer='InputShapenet',
                                                      param_str=repr(dataset_params_train)))
         datalayer_test = L.Python(name='data', include=dict(phase=caffe.TEST), ntop=0, top=['data', 'label'],
@@ -314,11 +314,12 @@ def partseg_seq_combined_categories(arch_str='64_128_256_256', batchnorm=True,
 
         # data layers
         datalayer_train = L.Python(name='data', include=dict(phase=caffe.TRAIN),
-                                   ntop=3 if renorm_class else 2,
+                                   ntop=4 if renorm_class else 3,
                                    python_param=dict(module='dataset_shapenet', layer='InputShapenetAllCategories',
                                                      param_str=repr(dataset_params_train)))
         datalayer_test = L.Python(name='data', include=dict(phase=caffe.TEST), ntop=0,
-                                  top=['data', 'label', 'label_mask'] if renorm_class else ['data', 'label'],
+                                  top=['data', 'label', 'label_mask'] \
+                                          if renorm_class else ['data', 'label'],
                                   python_param=dict(module='dataset_shapenet', layer='InputShapenetAllCategories',
                                                     param_str=repr(dataset_params_test)))
     else:
@@ -331,9 +332,9 @@ def partseg_seq_combined_categories(arch_str='64_128_256_256', batchnorm=True,
             n.label_mask = L.Input(shape=dict(dim=[1, nclass, 1, 1]))
     else:
         if renorm_class:
-            n.data, n.label, n.label_mask = datalayer_train
+            n.data, n.label, n.category_labels, n.label_mask = datalayer_train
         else:
-            n.data, n.label = datalayer_train
+            n.data, n.label, n.category_labels = datalayer_train
         n.test_data = datalayer_test
     n.data_feat = L.Python(n.data, python_param=dict(module='custom_layers', layer='PickAndScale',
                                                      param_str=feat_dims_str))
@@ -460,6 +461,12 @@ def partseg_seq_combined_categories(arch_str='64_128_256_256', batchnorm=True,
                                        param=[dict(lr_mult=1), dict(lr_mult=0.1)])
     top_prev = n['conv'+str(idx)]
 
+    # Use Global Max Pooling to get object classifiction
+    n['gpool_final'] = L.Python(top_prev,
+                                python_param=dict(module='custom_layers', layer='GlobalPooling'))
+    top_prev = n['gpool_final']
+
+    renorm_class = False
     if renorm_class:
         if deploy:
             n.prob = L.Softmax(top_prev)
@@ -472,8 +479,8 @@ def partseg_seq_combined_categories(arch_str='64_128_256_256', batchnorm=True,
         if deploy:
             n.prob = L.Softmax(top_prev)
         else:
-            n.loss = L.SoftmaxWithLoss(top_prev, n.label)
-            n.accuracy = L.Accuracy(top_prev, n.label)
+            n.loss = L.SoftmaxWithLoss(top_prev, n.category_labels)
+            #n.accuracy = L.Accuracy(top_prev, n.category_labels)
 
     net = n.to_proto()
 
